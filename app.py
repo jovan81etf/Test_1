@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, render_template_string
 from flask_cors import CORS
 import sqlite3
 from datetime import datetime
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -29,10 +30,10 @@ def receive_data():
         return jsonify({'status': 'fail', 'reason': 'No JSON'}), 400
 
     try:
-        temperature = float(data['temperature'])
-        humidity = float(data['humidity'])
-        noise = int(data['noise'])
-        luminance = int(data['luminance'])
+        temperature = float(data.get('temperature', 0))
+        humidity = float(data.get('humidity', 0))
+        noise = int(data.get('noise', 0))
+        luminance = int(data.get('luminance', 0))
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
         conn = sqlite3.connect(DB_NAME)
@@ -46,6 +47,11 @@ def receive_data():
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
+# --- HTTP-only endpoint for Arduino (no HTTPS redirect) ---
+@app.route('/data_http', methods=['POST'])
+def receive_data_http():
+    return receive_data()  # call the already defined function
+
 @app.route('/latest')
 def latest_data():
     conn = sqlite3.connect(DB_NAME)
@@ -53,7 +59,7 @@ def latest_data():
     c.execute("SELECT timestamp, noise FROM sensor_data ORDER BY id DESC LIMIT 50")
     rows = c.fetchall()
     conn.close()
-    rows.reverse()  # So oldest is first
+    rows.reverse()  # oldest first
     return jsonify(rows)
 
 @app.route('/chart')
@@ -62,12 +68,12 @@ def chart_page():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Live Temperature Chart</title>
+        <title>Live Noise Chart</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     </head>
     <body>
-        <h2>Live Temperature (last 50 readings)</h2>
-        <canvas id="tempChart" width="800" height="400"></canvas>
+        <h2>Live Noise (last 50 readings)</h2>
+        <canvas id="noiseChart" width="800" height="400"></canvas>
         <script>
             let chart;
 
@@ -75,17 +81,17 @@ def chart_page():
                 const response = await fetch('/latest');
                 const data = await response.json();
                 const labels = data.map(row => row[0]);  // timestamps
-                const temps = data.map(row => row[1]);   // temperatures
+                const noiseVals = data.map(row => row[1]); // noise
 
                 if (!chart) {
-                    const ctx = document.getElementById('tempChart').getContext('2d');
+                    const ctx = document.getElementById('noiseChart').getContext('2d');
                     chart = new Chart(ctx, {
                         type: 'line',
                         data: {
                             labels: labels,
                             datasets: [{
-                                label: 'Temperature (°C)',
-                                data: temps,
+                                label: 'Noise',
+                                data: noiseVals,
                                 borderWidth: 2,
                                 borderColor: 'blue',
                                 fill: false,
@@ -96,37 +102,26 @@ def chart_page():
                             responsive: true,
                             animation: false,
                             scales: {
-                                x: {
-                                    ticks: { maxTicksLimit: 10 }
-                                },
-                                y: {
-                                    beginAtZero: true
-                                }
+                                x: { ticks: { maxTicksLimit: 10 } },
+                                y: { beginAtZero: true }
                             }
                         }
                     });
                 } else {
                     chart.data.labels = labels;
-                    chart.data.datasets[0].data = temps;
+                    chart.data.datasets[0].data = noiseVals;
                     chart.update();
                 }
             }
 
-            // Initial load
             fetchDataAndUpdateChart();
-
-            // Update every 5 seconds
             setInterval(fetchDataAndUpdateChart, 5000);
         </script>
     </body>
     </html>
     ''')
 
-
-import os
-
 if __name__ == '__main__':
     init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-
